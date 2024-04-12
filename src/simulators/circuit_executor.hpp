@@ -27,6 +27,7 @@
 
 #include "transpile/cacheblocking.hpp"
 #include "transpile/fusion.hpp"
+#include "transpile/peephole.hpp"
 
 #include "simulators/state.hpp"
 
@@ -739,6 +740,11 @@ void Executor<state_t>::run_circuit_with_sampling(Circuit &circ,
   // Optimize circuit
   Noise::NoiseModel dummy_noise;
   state_t dummy_state;
+
+  Transpile::Peephole peephole_pass;
+  ExperimentResult peephole_result;
+  peephole_pass.optimize_circuit(circ, dummy_noise, dummy_state.opset(),
+                                peephole_result);
 
   auto fusion_pass = transpile_fusion(circ.opset(), config);
   ExperimentResult fusion_result;

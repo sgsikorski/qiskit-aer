@@ -47,6 +47,7 @@ DISABLE_WARNING_POP
 
 #include "transpile/cacheblocking.hpp"
 #include "transpile/fusion.hpp"
+#include "transpile/peephole.hpp"
 
 #include "simulators/density_matrix/densitymatrix.hpp"
 #include "simulators/density_matrix/densitymatrix_state.hpp"
@@ -442,6 +443,8 @@ private:
   uint_t cache_block_qubits_ = 0;
 
   Transpile::CacheBlocking cache_block_pass_;
+
+  Transpile::Peephole peephole_pass_;
 };
 
 bool AerState::is_gpu(bool raise_error) const {
@@ -528,7 +531,7 @@ void AerState::configure(const std::string &_key, const std::string &_value) {
   };
   static std::unordered_set<std::string> bool_config = {
       "custatevec_enable", "blocking_enable", "batched_shots_gpu",
-      "fusion_enable", "fusion_verbose"};
+      "fusion_enable", "fusion_verbose", "peephole_enable"};
 
   if (str_config.find(key) != str_config.end()) {
     configs_[_key] = _value;
@@ -1578,6 +1581,10 @@ void AerState::transpile_ops() {
     fusion_pass_.active = false;
   }
   }
+
+  peephole_pass_ = Transpile::Peephole();
+  peephole_pass_.optimize_circuit(buffer_, noise_model_, state_->opset(), last_result_);
+  
   // Override default fusion settings with custom config
   fusion_pass_.set_config(configs_);
   fusion_pass_.optimize_circuit(buffer_, noise_model_, state_->opset(),
