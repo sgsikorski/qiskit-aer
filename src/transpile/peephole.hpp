@@ -5,7 +5,6 @@
 #include "framework/utils.hpp"
 #include "transpile/circuitopt.hpp"
 
-#include <limits.h>
 #include <cassert>
 #include <string>
 
@@ -31,10 +30,13 @@ protected:
 
     void gate_cancellation(Circuit &circ, const opset_t &allowed_opset) const;
     uint_t check_control_(reg_t &qubits, 
-                        std::unordered_map<uint_t, BasisState> &qubitBasisStates,
-                        Circuit &circ, uint_t circIdx) const;
-    void adjustBasisStates(std::unordered_map<uint_t, BasisState> &qubitBasisStates,
-                                 Operation &op) const;
+                          std::unordered_map<uint_t, BasisState> &qubitBasisStates,
+                          Circuit &circ, uint_t circIdx) const;
+    void adjustBasisStates(std::unordered_map<uint_t, BasisState> &qubitBasisState,
+                           Operations::Op &op, uint_t opIdx) const;
+    void DeleteOperation(Circuit &circ, Operations::Op &op, uint_t opIdx) const;
+    void ReplaceOperation(Circuit &circ, uint_t opIdx,
+                          bool target, std::string name) const; 
 
 private:
   void dump(const Circuit &circuit) const {
@@ -78,7 +80,7 @@ void Peephole::optimize_circuit(Circuit &circ, Noise::NoiseModel &noise,
     auto &ops = circ.ops;
 
     gate_cancellation(circ, allowed_opset);
-    // dump(circ);
+    dump(circ);
 
 }
 
@@ -99,12 +101,12 @@ void Peephole::gate_cancellation(Circuit &circ, const opset_t &allowed_opset) co
     if (qubitsOn.size() > 1){
       // CNOT was removed - Adjust basis as we'll execute the gate
       if (check_control_(qubitsOn, qubitBasisState, circ, i)){
-        adjustBasisStates(qubitBasisState, op);
+        adjustBasisStates(qubitBasisState, op, i);
       }
     }
     else {
       // 1-Qubit gate operations
-      adjustBasisStates(qubitBasisState, op);
+      adjustBasisStates(qubitBasisState, op, i);
     }
   }
 }
@@ -119,13 +121,18 @@ uint_t Peephole::check_control_(reg_t &qubits,
 
   switch(controlState){
     case BasisState::Low:
-      // Delete operation
+      std::cout << "Erasing at index: " << circIdx << std::endl;
+      circ.ops.erase(circ.ops.begin() + circIdx);
+      circuit_changed = 1;
       break;
     case BasisState::High:
       if (targetState == BasisState::Top || targetState == BasisState::Low || targetState == BasisState::High){
         // Replace target with X
+        ReplaceOperation(circ, circIdx, true, "x");
+        circuit_changed = 1;
       } else if (targetState == BasisState::Plus || targetState == BasisState::Minus){
-        // Delete operation
+        circ.ops.erase(circ.ops.begin() + circIdx);
+        circuit_changed = 1;
       }
       break;
     // Same condition
@@ -133,9 +140,12 @@ uint_t Peephole::check_control_(reg_t &qubits,
     case BasisState::Minus:
     case BasisState::Top:
       if (targetState == BasisState::Plus){
-        // Delete operation
+        circ.ops.erase(circ.ops.begin() + circIdx);
+        circuit_changed = 1;
       } else if (targetState == BasisState::Minus){
         // Replace control with Z
+        ReplaceOperation(circ, circIdx, false, "z");
+        circuit_changed = 1;
       }
       break;
     default:
@@ -145,61 +155,79 @@ uint_t Peephole::check_control_(reg_t &qubits,
 }
 
 // Basis State Automata
-void Peephole::adjustBasisStates(std::unordered_map<uint_t, BasisState> &qubitBasisStates,
-                                 Operation &op) const {
+void Peephole::adjustBasisStates(std::unordered_map<uint_t, BasisState> &qubitBasisState,
+                                 Operations::Op &op, uint_t opIdx) const {
   if (!op.name.compare("h") && (!op.name.compare("x") || !op.name.compare("cx"))
                            && (!op.name.compare("y") || !op.name.compare("cy")) 
                            && (!op.name.compare("z") || !op.name.compare("cz"))){
-    qubitBasisState[i] = BasisState::Top;
+    qubitBasisState[opIdx] = BasisState::Top;
     return;
   }
-  switch(qubitBasisState[i]){
+  switch(qubitBasisState[opIdx]){
     case BasisState::Low:
-      if (op.name == 'h'){
-        qubitBasisState[i] = BasisState::Plus;
-      } else if (op.name == 'x' || op.name == 'y'){
-        qubitBasisState[i] = BasisState::High;
+      if (op.name.compare("h")){
+        qubitBasisState[opIdx] = BasisState::Plus;
+      } else if (op.name.compare("x") || op.name.compare("y")){
+        qubitBasisState[opIdx] = BasisState::High;
       }
       break;
     case BasisState::High:
-      if (op.name == 'h'){
-        qubitBasisState[i] = BasisState::Minus;
-      } else if (op.name == 'x' || op.name == 'y'){
-        qubitBasisState[i] = BasisState::Low;
+      if (op.name.compare("h")){
+        qubitBasisState[opIdx] = BasisState::Minus;
+      } else if (op.name.compare("x") || op.name.compare("y")){
+        qubitBasisState[opIdx] = BasisState::Low;
       }
       break;
     case BasisState::Plus:
-      if (op.name == 'h'){
-        qubitBasisState[i] = BasisState::Low;
-      } else if (op.name == 'z' || op.name == 'y'){
-        qubitBasisState[i] = BasisState::Minus;
+      if (op.name.compare("h")){
+        qubitBasisState[opIdx] = BasisState::Low;
+      } else if (op.name.compare("z") || op.name.compare("y")){
+        qubitBasisState[opIdx] = BasisState::Minus;
       }
       break;
     case BasisState::Minus:
-      if (op.name == 'h'){
-        qubitBasisState[i] = BasisState::High;
-      } else if (op.name == 'z' || op.name == 'y'){
-        qubitBasisState[i] = BasisState::Plus;
+      if (op.name.compare("h")){
+        qubitBasisState[opIdx] = BasisState::High;
+      } else if (op.name.compare("z") || op.name.compare("y")){
+        qubitBasisState[opIdx] = BasisState::Plus;
       }
       break;
     case BasisState::Left:
-      if (op.name == 'h' || op.name == 'x' || op.name == 'y'){
-        qubitBasisState[i] = BasisState::Right;
+      if (op.name.compare("h") || op.name.compare("x") || op.name.compare("y")){
+        qubitBasisState[opIdx] = BasisState::Right;
       } 
       break;
     case BasisState::Right:
-      if (op.name == 'h' || op.name == 'x' || op.name == 'y'){
-        qubitBasisState[i] = BasisState::Left;
+      if (op.name.compare("h") || op.name.compare("x") || op.name.compare("y")){
+        qubitBasisState[opIdx] = BasisState::Left;
       } 
-      break
+      break;
     case BasisState::Top:
-      if (op.OpType == 'reset'){
-        qubitBasisState[i] = BasisState::Low;
+      if (op.type == Operations::OpType::reset){
+        qubitBasisState[opIdx] = BasisState::Low;
       }
       break;
     default:
       assert(0);
       }
+}
+
+void Peephole::ReplaceOperation(Circuit &circ, uint_t opIdx,
+                                bool target, std::string name) const {
+  Operations::Op rgate;
+  rgate.type = Operations::OpType::gate;
+  rgate.name = name;
+  if (target){
+    rgate.qubits = {circ.ops[opIdx].qubits[0]};
+  } else{
+    rgate.qubits = {circ.ops[opIdx].qubits[1]};
+  }
+  rgate.string_params = {rgate.name};
+
+  // Insert replacement gate
+  circ.ops.emplace(circ.ops.begin() + opIdx, rgate);
+  // Remove the CNOT
+  circ.ops.erase(circ.ops.begin() + opIdx);
 }
 
 } // namespace AER
