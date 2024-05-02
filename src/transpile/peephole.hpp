@@ -34,9 +34,9 @@ protected:
                           Circuit &circ, uint_t circIdx) const;
     void adjustBasisStates(std::unordered_map<uint_t, BasisState> &qubitBasisState,
                            Operations::Op &op, uint_t opIdx) const;
-    void DeleteOperation(Circuit &circ, Operations::Op &op, uint_t opIdx) const;
     void ReplaceOperation(Circuit &circ, uint_t opIdx,
                           bool target, std::string name) const; 
+    void ClusterPass(Circuit &circ) const;
 
 private:
   void dump(const Circuit &circuit) const {
@@ -77,9 +77,9 @@ void Peephole::optimize_circuit(Circuit &circ, Noise::NoiseModel &noise,
         return;
     }
     dump(circ);
-    auto &ops = circ.ops;
 
     gate_cancellation(circ, allowed_opset);
+    ClusterPass(circ);
     dump(circ);
 
 }
@@ -91,22 +91,33 @@ void Peephole::gate_cancellation(Circuit &circ, const opset_t &allowed_opset) co
   for (uint_t i = 0; i < circ.num_qubits; i++){
     qubitBasisState.insert({i, BasisState::Low});
   }
+  uint_t converged = 0;
+  while(!converged){ 
+    converged = 1;
+    for (uint_t i = 0; i < circ.ops.size(); i++){
+      auto op = circ.ops[i];
+      reg_t qubitsOn = circ.ops[i].qubits;
 
-  for (uint_t i = 0; i < circ.ops.size(); i++){
-    // Seperate cx, cz, cy into CNOT and x, y, z
-    auto op = circ.ops[i];
-    reg_t qubitsOn = circ.ops[i].qubits;
-
-    // 2-Qubit gate operations
-    if (qubitsOn.size() > 1){
-      // CNOT was removed - Adjust basis as we'll execute the gate
-      if (check_control_(qubitsOn, qubitBasisState, circ, i)){
+      // 2-Qubit gate operations
+      if (qubitsOn.size() > 1){
+        if (!op.name.compare("cx") || 
+            (!op.name.compare("cz") && 
+            ((qubitBasisState[qubitsOn[0]] == qubitBasisState[qubitsOn[1]]) ||
+            (qubitBasisState[qubitsOn[0]] == BasisState::Low || 
+            qubitBasisState[qubitsOn[0]] == BasisState::High || 
+            qubitBasisState[qubitsOn[1]] == BasisState::Low || 
+            qubitBasisState[qubitsOn[1]] == BasisState::High) ))){
+          if (check_control_(qubitsOn, qubitBasisState, circ, i)){
+            converged = 0;
+            std::cout << "Not converged on idx: " << i << std::endl;
+            adjustBasisStates(qubitBasisState, op, i);
+          }
+        }
+      }
+      else {
+        // 1-Qubit gate operations
         adjustBasisStates(qubitBasisState, op, i);
       }
-    }
-    else {
-      // 1-Qubit gate operations
-      adjustBasisStates(qubitBasisState, op, i);
     }
   }
 }
@@ -121,7 +132,6 @@ uint_t Peephole::check_control_(reg_t &qubits,
 
   switch(controlState){
     case BasisState::Low:
-      std::cout << "Erasing at index: " << circIdx << std::endl;
       circ.ops.erase(circ.ops.begin() + circIdx);
       circuit_changed = 1;
       break;
@@ -228,6 +238,51 @@ void Peephole::ReplaceOperation(Circuit &circ, uint_t opIdx,
   circ.ops.emplace(circ.ops.begin() + opIdx, rgate);
   // Remove the CNOT
   circ.ops.erase(circ.ops.begin() + opIdx);
+}
+
+void Peephole::ClusterPass(Circuit &circ) const {
+  std::unordered_map<uint_t, uint_t> earliestUsed;
+  std::unordered_map<uint_t, uint_t> latestUsed;
+  for (uint_t opIdx = 0; opIdx < circ.ops.size(); opIdx++){
+    auto qubits = circ.ops[opIdx].qubits;
+    if (qubits.size() > 1){
+      if (latestUsed.find(qubits[0]) == latestUsed.end()){
+          latestUsed.insert({qubits[0], opIdx});
+      }
+      if (latestUsed.find(qubits[1]) == latestUsed.end()){
+        latestUsed.insert({qubits[1], opIdx});
+      }
+    }
+  }
+
+  uint_t converged = 0;
+  while (!converged){
+    converged = 1;
+    // New forward pass
+    for (uint_t opIdx = 0; opIdx < circ.ops.size(); opIdx++){
+      auto qubits = circ.ops[opIdx].qubits;
+      if (qubits.size() == 2){
+        latestUsed[qubits[0]] = opIdx;
+        latestUsed[qubits[1]] = opIdx;
+      }
+      if (qubits.size() == 1){
+        if (opIdx + 1 < circ.ops.size()){
+          auto q = qubits[0];
+          auto nextQubits = circ.ops[opIdx + 1].qubits;
+          if (latestUsed[q] != opIdx + 1 && 
+              (std::find(nextQubits.begin(), nextQubits.end(), qubits[0]))!=nextQubits.end()){
+            // Swap the operations
+            auto tempOp = circ.ops[opIdx];
+            circ.ops[opIdx] = circ.ops[opIdx+1];
+            circ.ops[opIdx+1] = tempOp;
+            converged = 0;
+            // Because we swapped, skip ahead
+            opIdx++;
+          }
+        }
+      }
+    }
+  }
 }
 
 } // namespace AER
