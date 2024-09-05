@@ -76,11 +76,11 @@ void Peephole::optimize_circuit(Circuit &circ, Noise::NoiseModel &noise,
     if (!peephole_enabled_){
         return;
     }
-    dump(circ);
+    // dump(circ);
 
     gate_cancellation(circ, allowed_opset);
     ClusterPass(circ);
-    dump(circ);
+    // dump(circ);
 
 }
 
@@ -109,7 +109,6 @@ void Peephole::gate_cancellation(Circuit &circ, const opset_t &allowed_opset) co
             qubitBasisState[qubitsOn[1]] == BasisState::High) ))){
           if (check_control_(qubitsOn, qubitBasisState, circ, i)){
             converged = 0;
-            std::cout << "Not converged on idx: " << i << std::endl;
             adjustBasisStates(qubitBasisState, op, i);
           }
         }
